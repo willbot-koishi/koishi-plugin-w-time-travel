@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-w-time-travel",
   "description": "WillBot: Time travel function",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "ctx-hook": "^0.3.0",
-    "parse-duration": "^2.1.4"
+    "parse-duration": "^1.1.2"
   },
   "scripts": {
     "build": "yarn workspace willbot build w-time-travel",
