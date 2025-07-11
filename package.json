@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-w-time-travel",
-  "description": "WillBot: execute command at another time",
-  "version": "0.0.1",
+  "description": "WillBot: Time travel function",
+  "version": "0.1.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -18,7 +18,12 @@
     "koishi": "^4.18.7"
   },
   "dependencies": {
-    "ctx-hook": "^0.2.0",
+    "ctx-hook": "^0.3.0",
     "parse-duration": "^2.1.4"
+  },
+  "scripts": {
+    "build": "yarn workspace willbot build w-time-travel",
+    "bump": "yarn workspace willbot bump w-time-travel",
+    "pub": "yarn workspace willbot pub w-time-travel"
   }
 }

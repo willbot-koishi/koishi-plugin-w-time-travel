@@ -1,4 +1,4 @@
-import { Context, Schema, SessionError } from 'koishi'
+import { Context, h, Schema, Session, SessionError } from 'koishi'
 import parseDuration from 'parse-duration'
 import { useGlobalCtxHook } from 'ctx-hook'
 
@@ -47,16 +47,29 @@ const parseTimeTravelMode = (mode: string): TimeTravelMode => {
   }
 }
 
-const parseTimeTravelConfig = <M extends TimeTravelMode>(mode: M, param: string): TimeTravelConfig & { mode: M } => {
-  if (mode === TimeTravelMode.Absolute) {
-    const target = new Date(param).getTime()
-    if (isNaN(target)) throw fail('Invalid target date.')
-    return { mode: TimeTravelMode.Absolute as M, param: target }
+const stringifyTimeTravelConfig = (config: TimeTravelConfig): string => {
+  switch (config.mode) {
+    case TimeTravelMode.Absolute:
+      return `to ${new Date(config.param).toLocaleString()}`
+    case TimeTravelMode.Relative:
+      return `by ${config.param}ms`
   }
-  else if (mode === TimeTravelMode.Relative) {
-    const delta = parseDuration(param)
-    if (delta === null) throw fail('Invalid time delta.')
-    return { mode: TimeTravelMode.Relative as M, param: delta }
+}
+
+const parseTimeTravelConfig = <M extends TimeTravelMode>(
+  mode: M, param: string
+): TimeTravelConfig & { mode: M } => {
+  switch (mode) {
+    case TimeTravelMode.Absolute: {
+      const target = new Date(param).getTime()
+      if (isNaN(target)) throw fail('Invalid target date.')
+      return { mode: TimeTravelMode.Absolute as M, param: target }
+    }
+    case TimeTravelMode.Relative: {
+      const delta = parseDuration(param)
+      if (delta === null) throw fail('Invalid time delta.')
+      return { mode: TimeTravelMode.Relative as M, param: delta }
+    }
   }
 }
 
@@ -67,7 +80,7 @@ export function apply(ctx: Context) {
     }
   })
 
-  const { wrap, dispose } = useGlobalCtxHook('Date', (Date0, config: TimeTravelConfig) => {
+  const { wrap, dispose, als } = useGlobalCtxHook('Date', (Date0, config: TimeTravelConfig) => {
     const getTravelledNow = config.mode === TimeTravelMode.Absolute
       ? () => config.param
       : () => Date0.now() + config.param
@@ -91,28 +104,72 @@ export function apply(ctx: Context) {
 
   ctx.on('dispose', dispose)
 
-  ctx.command('time-travel', 'Time travel')
+  ctx.command('time.travel', 'Time travel')
 
-  ctx.command('time-travel.to <date:string> <command:text>', 'Time travel to <date> and execute <command>', { authority: 3, strictOptions: true })
-    .action(async ({ session }, date, command) => wrap(
-      () => session.execute(command),
-      parseTimeTravelConfig(TimeTravelMode.Absolute, date)
-    )())
+  ctx.command(
+    'time.travel.to <date:string> <command:text>',
+    h.escape('Time travel to <date> and execute <command>'),
+    { authority: 3, strictOptions: true }
+  )
+    .action(async ({ session }, date, command) => travel(
+      parseTimeTravelConfig(TimeTravelMode.Absolute, date),
+      session,
+      command,
+    ))
 
-  ctx.command('time-travel.by <delta:string> <command:text>', 'Time travel by <delta> and execute <command>', { authority: 3, strictOptions: true })
-    .action(async ({ session }, delta, command) => wrap(
-      () => session.execute(command),
-      parseTimeTravelConfig(TimeTravelMode.Relative, delta)
-    )())
+  ctx.command(
+    'time.travel.by <delta:string> <command:text>',
+    h.escape('Time travel by <delta> and execute <command>'),
+    { authority: 3, strictOptions: true }
+  )
+    .action(async ({ session }, delta, command) => travel(
+      parseTimeTravelConfig(TimeTravelMode.Relative, delta),
+      session,
+      command
+    ))
+
+  const travel = (config: TimeTravelConfig, session: Session, command: string) => {
+    console.log(Error().stack)
+
+    if (config.mode === TimeTravelMode.Relative) {
+      const parentConfig = als.getStore()
+      if (parentConfig?.mode === TimeTravelMode.Relative)
+        fail('Cannot nest relative time travels.')
+      if (parentConfig?.mode === TimeTravelMode.Absolute) {
+        config = {
+          mode: TimeTravelMode.Absolute,
+          param: parentConfig.param + config.param,
+        }
+      }
+    }
+
+    return wrap(() => session.execute(command), config)()
+  }
 
   ctx.inject([ 'database' ], ctx => {
     ctx.model.extend('w-time-travel-warp', {
       id: 'string',
-      mode: 'unsigned(8)',
+      mode: 'unsigned',
       param: 'integer',
     })
 
-    ctx.command('time-travel.warp.create <id:string> <mode:string> <param:string>', 'Create a public time travel warp point', { authority: 3, strictOptions: true })
+    ctx.command(
+      'time.travel.warp <id:string> <command:text>',
+      h.escape('Time travel using warp point <id> and execute <command>'),
+      { strictOptions: true }
+    )
+      .action(async ({ session }, id, command) => {
+        const [ warp ] = await ctx.database.get('w-time-travel-warp', id)
+        if (! warp) fail(`Warp point '${id}' does not exist.`)
+
+        return travel(warp, session, command)
+      })
+
+    ctx.command(
+      'time.travel.warp.create <id:string> <mode:string> <param:string>',
+      'Create a public time travel warp point',
+      { authority: 3, strictOptions: true }
+    )
       .action(async ({}, id, mode, param) => {
         const [ warp ] = await ctx.database.get('w-time-travel-warp', id)
         if (warp) fail(`Warp point '${id}' already exists.`)
@@ -125,7 +182,11 @@ export function apply(ctx: Context) {
         return `Warp point '${id}' created.`
       })
 
-    ctx.command('time-travel.warp.delete <id:string>', 'Delete a time travel warp point', { authority: 3 })
+    ctx.command(
+      'time.travel.warp.delete <id:string>',
+      'Delete a time travel warp point',
+      { authority: 3 }
+    )
       .action(async ({}, id) => {
         const [ warp ] = await ctx.database.get('w-time-travel-warp', id)
         if (! warp) fail(`Warp point '${id}' does not exist.`)
@@ -134,20 +195,12 @@ export function apply(ctx: Context) {
         return `Warp point '${id}' deleted.`
       })
 
-    ctx.command('time-travel.warp <id:string> <command:text>', 'Time travel using warp point <id> and execute <command>', { strictOptions: true })
-      .action(async ({ session }, id, command) => {
-        const [ warp ] = await ctx.database.get('w-time-travel-warp', id)
-        if (! warp) fail(`Warp point '${id}' does not exist.`)
-
-        return wrap(() => session.execute(command), warp)()
-      })
-
-    ctx.command('time-travel.warp.list', 'List all time travel warp points')
+    ctx.command('time.travel.warp.list', 'List all time travel warp points')
       .action(async () => {
         const warps = await ctx.database.get('w-time-travel-warp', {})
         if (! warps.length) return 'No warp points available.'
         return `${warps.length} warp point(s) available:\n` + warps
-          .map(warp => `${warp.id}: ${warp.mode === TimeTravelMode.Absolute ? 'to' : 'by'} ${warp.param}`)
+          .map(warp => `${warp.id}: ${stringifyTimeTravelConfig(warp)}`)
           .join('\n')
       })
   })
